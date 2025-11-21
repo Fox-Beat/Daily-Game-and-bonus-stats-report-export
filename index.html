@@ -5,19 +5,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AutoBonus Reporter</title>
     <script src="https://cdn.tailwindcss.com"></script>
-  <script type="importmap">
+    <!-- Babel Standalone for in-browser compilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- FIX: Clean Import Map with ONLY React 18 -->
+    <script type="importmap">
 {
   "imports": {
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "react": "https://aistudiocdn.com/react@^19.2.0",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
+    "react": "https://esm.sh/react@18.2.0",
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "lucide-react": "https://esm.sh/lucide-react@0.263.1",
     "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
     "react-markdown": "https://aistudiocdn.com/react-markdown@^10.1.0"
   }
 }
 </script>
-<link rel="stylesheet" href="/index.css">
+
+    <style>
+      .cursor-wait { cursor: wait; }
+      @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    </style>
+  <link rel="stylesheet" href="/index.css">
 </head>
   <body>
     <div id="root">
@@ -25,11 +35,433 @@
         <div style="width: 2rem; height: 2rem; border: 2px solid #4f46e5; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></div>
         <p>Loading Dashboard...</p>
       </div>
-      <style>
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-      </style>
     </div>
-    <script type="module" src="./index.tsx"></script>
+
+    <script type="text/babel" data-type="module">
+      import React, { useState, useEffect } from 'react';
+      import ReactDOM from 'react-dom/client';
+      import { Download, FileDown, Loader2, AlertTriangle, CheckCircle2, Settings, BarChart3, HelpCircle, LayoutDashboard } from 'lucide-react';
+
+      // --- TYPES & INTERFACES ---
+      
+      // (Removed 'export' keywords as this is now a single file script)
+      
+      const Tab = {
+        GENERATOR: 'GENERATOR',
+        HELP: 'HELP',
+      };
+
+      // --- DATE UTILS ---
+
+      const formatDateForApi = (date, format, isEnd = false) => {
+        const yyyy = date.getFullYear();
+        const mm = String(date.getMonth() + 1).padStart(2, '0');
+        const dd = String(date.getDate()).padStart(2, '0');
+        
+        if (format === 'date') {
+          return `${yyyy}-${mm}-${dd}`;
+        }
+
+        const time = isEnd ? '23:59:59' : '00:00:00';
+        return `${yyyy}-${mm}-${dd} ${time}`;
+      };
+
+      const calculateReportDates = (dateFormat) => {
+        const today = new Date();
+        const dayOfWeek = today.getDay(); // 0 = Sunday, 1 = Monday, ...
+        
+        const ranges = [];
+
+        // If it's Monday (1), we want Friday through Sunday as ONE range
+        if (dayOfWeek === 1) {
+          // Friday Start
+          const friday = new Date(today);
+          friday.setDate(today.getDate() - 3);
+
+          // Sunday End
+          const sunday = new Date(today);
+          sunday.setDate(today.getDate() - 1);
+
+          ranges.push({
+            label: 'Weekend Report (Fri-Sun)',
+            startDate: formatDateForApi(friday, dateFormat),
+            endDate: formatDateForApi(sunday, dateFormat, true)
+          });
+        } else {
+          // Standard Daily Run (Yesterday)
+          const yesterday = new Date(today);
+          yesterday.setDate(today.getDate() - 1);
+          ranges.push({
+            label: 'Daily Report (Yesterday)',
+            startDate: formatDateForApi(yesterday, dateFormat),
+            endDate: formatDateForApi(yesterday, dateFormat, true)
+          });
+        }
+
+        return ranges;
+      };
+
+      // --- COMPONENT: ReportExporter ---
+
+      const ReportExporter = ({ userConfig, reports }) => {
+        const [isProcessing, setIsProcessing] = useState(false);
+        const [status, setStatus] = useState('');
+        const [completed, setCompleted] = useState(false);
+
+        const runExport = async () => {
+          setIsProcessing(true);
+          setCompleted(false);
+          setStatus('Initializing export sequence...');
+
+          // Calculate dates based on the 'date' format (YYYY-MM-DD) as a baseline
+          const dateRanges = calculateReportDates('date'); 
+          const activeRange = dateRanges[0];
+
+          if (!activeRange) {
+            setStatus('Error: Could not determine date range.');
+            setIsProcessing(false);
+            return;
+          }
+
+          const submitReport = (report, delayMs) => {
+            return new Promise((resolve) => {
+              setTimeout(() => {
+                setStatus(`Exporting ${report.name}...`);
+
+                const startStr = formatDateForApi(new Date(activeRange.startDate), report.dateFormat, false);
+                const endStr = formatDateForApi(new Date(activeRange.endDate), report.dateFormat, true);
+
+                const dateRangeInnerJson = JSON.stringify({
+                  startdate: startStr,
+                  enddate: endStr
+                });
+
+                const filtersObj = report.getFilters(userConfig, dateRangeInnerJson);
+                
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = 'https://admin-cur.techonlinecorp.com/reportviewer/api/report/execute/export';
+                form.target = '_blank';
+                form.style.display = 'none';
+
+                const payload = {
+                  reportId: report.reportId,
+                  configurationCode: report.configurationCode,
+                  format: 'csv',
+                  apikey: userConfig.apiKey || '',
+                  filters: JSON.stringify(filtersObj),
+                  outputs: report.outputs,
+                  jsonOptions: JSON.stringify({ includeLegend: "none" })
+                };
+
+                Object.entries(payload).forEach(([key, value]) => {
+                  const input = document.createElement('input');
+                  input.type = 'hidden';
+                  input.name = key;
+                  input.value = value;
+                  form.appendChild(input);
+                });
+
+                document.body.appendChild(form);
+                form.submit();
+                
+                setTimeout(() => {
+                  document.body.removeChild(form);
+                }, 1000);
+
+                resolve();
+              }, delayMs);
+            });
+          };
+
+          try {
+            let delayCounter = 0;
+            const DELAY_STEP = 2500;
+
+            for (const report of reports) {
+              await submitReport(report, delayCounter * DELAY_STEP);
+              delayCounter++;
+            }
+
+            setTimeout(() => {
+              setStatus(`Success! Exported reports for ${activeRange.label}`);
+              setIsProcessing(false);
+              setCompleted(true);
+            }, (reports.length * DELAY_STEP) + 500);
+
+          } catch (error) {
+            console.error(error);
+            setStatus('Error during export sequence.');
+            setIsProcessing(false);
+          }
+        };
+
+        return (
+          <div className="flex flex-col items-center text-center space-y-8">
+            <div className="bg-indigo-500/10 border border-indigo-500/20 p-4 rounded-lg text-indigo-200 text-sm max-w-lg w-full text-left">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="text-indigo-400 shrink-0 mt-0.5" size={18} />
+                <div>
+                  <p className="font-semibold text-indigo-100 mb-1">Browser Requirement</p>
+                  <p className="text-indigo-200/80 mb-2">
+                    Because this tool downloads multiple files at once, your browser may block the second download.
+                  </p>
+                  <p className="text-indigo-200/80">
+                    Please look for a <strong>"Pop-up blocked"</strong> icon in your address bar and select <strong>"Always allow"</strong> for this site.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-8 rounded-2xl bg-slate-800 border border-slate-700 shadow-2xl shadow-black/40 w-full max-w-md transition-all hover:border-slate-600">
+                <div className="mb-8">
+                  <div className="w-20 h-20 bg-slate-900 rounded-full flex items-center justify-center mx-auto mb-4 shadow-inner shadow-black/50">
+                    {completed ? (
+                      <CheckCircle2 size={40} className="text-emerald-500 animate-in zoom-in duration-300" />
+                    ) : (
+                      <FileDown size={40} className={`text-indigo-400 ${isProcessing ? 'animate-pulse' : ''}`} />
+                    )}
+                  </div>
+                  <h3 className="text-2xl font-bold text-white">
+                    {completed ? 'Export Complete' : 'Ready to Export'}
+                  </h3>
+                  <p className="text-slate-400 mt-2">
+                    {isProcessing ? status : 'One click to download Bonus & Game stats'}
+                  </p>
+                </div>
+
+                <button 
+                  onClick={runExport}
+                  disabled={isProcessing}
+                  className={`
+                      w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-3 shadow-lg transition-all transform active:scale-95
+                      ${isProcessing 
+                        ? 'bg-slate-700 text-slate-400 cursor-wait' 
+                        : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white shadow-indigo-900/40'}
+                  `}
+                >
+                  {isProcessing ? (
+                    <>
+                      <Loader2 className="animate-spin" /> Processing...
+                    </>
+                  ) : (
+                    <>
+                      <Download size={24} /> Export Reports
+                    </>
+                  )}
+                </button>
+                
+                <div className="mt-6 flex flex-col gap-2 text-xs text-slate-500 font-mono">
+                  <div className="flex justify-between border-b border-slate-700/50 pb-2">
+                      <span>TARGET</span>
+                      <span className="text-slate-300">admin-cur.techonlinecorp.com</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-700/50 pb-2 pt-1">
+                      <span>FORMAT</span>
+                      <span className="text-slate-300">CSV (Standard)</span>
+                  </div>
+                  <div className="flex justify-between pt-1">
+                      <span>AUTH</span>
+                      <span className="text-slate-300">Browser Session (Cookies)</span>
+                  </div>
+                </div>
+            </div>
+          </div>
+        );
+      };
+
+      // --- MAIN APP COMPONENT ---
+
+      const REPORT_TEMPLATES = [
+        {
+          id: 'bonus_stats',
+          name: 'Bonus Statistics',
+          reportId: 'Reporting___Bonus_statistics',
+          configurationCode: '477053',
+          dateFormat: 'datetime',
+          outputs: "currency_code,username,userid,instance_name,viplevel,bonus_template_name,bonus_type_name,fillrealbalance,fillbonusbalance,fillpendingwinnings,bonus_status,product,game_name,accepted,accepted_fs,bonus_bet_cancel,bonus_bet,bonus_pending_winnings_bet,bonus_pending_winnings_cancel,bonus_pending_winnings_win,bonus_win,cancelled_bonus_initial,cancelled_bonus_initial_fs,cancelled_pending_winnings,cancelled_used_bonus_initial,expired_bonus_initial,expired_bonus_initial_fs,expired_pending_winnings,bonus_bet_fs,player_count,redeemed_bonus_initial,redeemed_bonus_initial_fs,redeemed_pending_winnings,reverse_redeemed_bonus_initial,used_bonus_initial",
+          getFilters: (config, dateRangeStr) => ({
+            instance: config.instances,
+            daterange: dateRangeStr,
+            time_zone_picker: config.timeZone,
+            reportBy: "username,userid,instance,viplevel,bonus_template_name,bonus_type_name,fillrealbalance,fillbonusbalance,fillpendingwinnings,bonus_status,product,game_name"
+          })
+        },
+        {
+          id: 'game_stats',
+          name: 'Game Statistics',
+          reportId: 'Reporting___Game_statistics',
+          configurationCode: '466541',
+          dateFormat: 'date',
+          outputs: "currencycode,username,playercode,casino,date1,clienttype,clientplatform,viplevel,platform,gamename,maximumrtp,gametype,gtype,gamegroup,gameshortname,gameprovider,gametechnology,gamesuite,gamescnt,totalbets,totalgamebets,totalgamewins,totalincome,refund,totalplayerwins,realbets,realmoneyincome",
+          getFilters: (config, dateRangeStr) => ({
+            sdin: "2",
+            siaccounts: "2",
+            casino: config.instances, 
+            daterange: dateRangeStr,
+            reportBy: "playerusername,casino,date1,currencycode,clienttype,clientplatform,viplevel,dplatform,gamename,gametype,gtype,gamegroup,gameshortname,gameprovider,gametechnology,gamesuite"
+          })
+        }
+      ];
+
+      const App = () => {
+        const [activeTab, setActiveTab] = useState(Tab.GENERATOR);
+        
+        const [userConfig, setUserConfig] = useState({
+          instances: ['4280', '4690'],
+          timeZone: 'Africa/Abidjan',
+          apiKey: '', 
+        });
+
+        const [showConfig, setShowConfig] = useState(false);
+
+        return (
+          <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-indigo-500/30">
+            <header className="sticky top-0 z-50 bg-slate-900/80 backdrop-blur-md border-b border-slate-800">
+              <div className="max-w-5xl mx-auto px-4 py-4 flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-gradient-to-br from-indigo-600 to-purple-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                      <LayoutDashboard className="text-white" size={24} />
+                  </div>
+                  <div>
+                      <h1 className="text-xl font-bold tracking-tight">Auto Report Dashboard</h1>
+                      <p className="text-xs text-slate-400">Daily Statistics Exporter</p>
+                  </div>
+                </div>
+                
+                <div className="flex items-center gap-2">
+                  <button 
+                      onClick={() => setShowConfig(!showConfig)}
+                      className={`p-2 rounded-lg transition-colors ${showConfig ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}
+                      title="Settings"
+                  >
+                      <Settings size={20} />
+                  </button>
+                </div>
+              </div>
+            </header>
+
+            <main className="max-w-5xl mx-auto px-4 py-8">
+              
+              {showConfig && (
+                  <div className="mb-8 bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-xl animate-in slide-in-from-top-4">
+                      <h2 className="text-lg font-semibold mb-4 flex items-center gap-2 text-indigo-400">
+                          <Settings size={18} /> Global Configuration
+                      </h2>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                              <label className="block text-sm text-slate-400 mb-1">Instance IDs / Casino IDs</label>
+                              <input 
+                                  type="text" 
+                                  value={userConfig.instances.join(',')} 
+                                  onChange={(e) => setUserConfig({...userConfig, instances: e.target.value.split(',').map(s => s.trim())})}
+                                  className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-slate-200"
+                                  placeholder="4280, 4690"
+                              />
+                              <p className="text-xs text-slate-500 mt-1">Comma separated IDs</p>
+                          </div>
+                          <div>
+                              <label className="block text-sm text-slate-400 mb-1">Timezone</label>
+                              <input 
+                                  type="text" 
+                                  value={userConfig.timeZone} 
+                                  onChange={(e) => setUserConfig({...userConfig, timeZone: e.target.value})}
+                                  className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-slate-200"
+                              />
+                          </div>
+                      </div>
+                  </div>
+              )}
+
+              <div className="flex flex-wrap gap-2 md:gap-4 mb-6 border-b border-slate-800 pb-1">
+                  <button 
+                      onClick={() => setActiveTab(Tab.GENERATOR)}
+                      className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-t-lg transition-colors relative ${activeTab === Tab.GENERATOR ? 'text-white bg-slate-800/50' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                      <BarChart3 size={16} />
+                      Dashboard
+                      {activeTab === Tab.GENERATOR && <div className="absolute bottom-[-5px] left-0 w-full h-0.5 bg-indigo-500"></div>}
+                  </button>
+                  <button 
+                      onClick={() => setActiveTab(Tab.HELP)}
+                      className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-t-lg transition-colors relative ${activeTab === Tab.HELP ? 'text-white bg-slate-800/50' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                      <HelpCircle size={16} />
+                      How it works
+                      {activeTab === Tab.HELP && <div className="absolute bottom-[-5px] left-0 w-full h-0.5 bg-emerald-500"></div>}
+                  </button>
+              </div>
+
+              <div className="animate-in fade-in duration-500">
+                  {activeTab === Tab.GENERATOR && (
+                      <div className="space-y-6">
+                          <div className="bg-gradient-to-br from-slate-900 to-slate-900 p-6 rounded-xl border border-slate-800 shadow-lg relative overflow-hidden min-h-[400px] flex items-center justify-center">
+                              <div className="absolute top-0 right-0 p-8 opacity-5 pointer-events-none">
+                                  <LayoutDashboard size={120} />
+                              </div>
+                              
+                              <ReportExporter 
+                                  userConfig={userConfig} 
+                                  reports={REPORT_TEMPLATES} 
+                              />
+                          </div>
+                      </div>
+                  )}
+
+                  {activeTab === Tab.HELP && (
+                      <div className="space-y-8 max-w-3xl mx-auto">
+                          <div className="bg-slate-900 p-8 rounded-xl border border-slate-800">
+                              <h2 className="text-2xl font-bold text-white mb-6">Usage Instructions</h2>
+                              
+                              <div className="space-y-6">
+                                  <section>
+                                      <div className="bg-slate-950 p-4 rounded border border-slate-800">
+                                          <h4 className="font-semibold text-indigo-400 mb-2">Prerequisites</h4>
+                                          <ul className="list-disc list-inside text-sm text-slate-400 space-y-2">
+                                              <li>
+                                                  Ensure you are logged into <span className="text-slate-200">admin-cur.techonlinecorp.com</span> in this same browser.
+                                              </li>
+                                              <li>
+                                                  Allow <strong>Pop-ups</strong> from this page. (The tool needs to open multiple export windows rapidly).
+                                              </li>
+                                          </ul>
+                                      </div>
+                                  </section>
+
+                                  <section>
+                                      <h3 className="text-lg font-semibold text-emerald-400 mb-2 flex items-center gap-2">
+                                          Date Automation
+                                      </h3>
+                                      <div className="bg-slate-950/50 p-4 rounded-lg border border-slate-800 text-sm text-slate-300 font-mono space-y-2">
+                                        <div className="flex justify-between">
+                                            <span>Run on MONDAY</span>
+                                            <span className="text-emerald-400">Exports Fri, Sat, Sun (Combined)</span>
+                                        </div>
+                                        <div className="flex justify-between border-t border-slate-800 pt-2">
+                                            <span>Run on TUE-SUN</span>
+                                            <span className="text-indigo-400">Exports Yesterday (Daily)</span>
+                                        </div>
+                                      </div>
+                                  </section>
+                              </div>
+                          </div>
+                      </div>
+                  )}
+              </div>
+
+            </main>
+          </div>
+        );
+      };
+
+      const rootElement = document.getElementById('root');
+      const root = ReactDOM.createRoot(rootElement);
+      root.render(
+        <React.StrictMode>
+          <App />
+        </React.StrictMode>
+      );
+    </script>
   <script type="module" src="/index.tsx"></script>
 </body>
 </html>
