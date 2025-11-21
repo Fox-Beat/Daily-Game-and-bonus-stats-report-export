@@ -1,7 +1,6 @@
-
 import React, { useState } from 'react';
-import { UserConfig, ReportDefinition } from '../types';
-import { calculateReportDates, formatDateForApi } from '../utils/dateHelper';
+import { UserConfig, ReportDefinition } from '../types.ts';
+import { calculateReportDates, formatDateForApi } from '../utils/dateHelper.ts';
 import { Download, FileDown, Loader2, AlertTriangle, CheckCircle2 } from 'lucide-react';
 
 interface Props {

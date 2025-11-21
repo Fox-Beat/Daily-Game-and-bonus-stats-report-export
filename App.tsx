@@ -1,7 +1,6 @@
-
 import React, { useState, useEffect } from 'react';
-import { UserConfig, Tab, ReportDefinition } from './types';
-import ReportExporter from './components/BookmarkletGenerator'; // Filename kept, component logic changed
+import { UserConfig, Tab, ReportDefinition } from './types.ts';
+import ReportExporter from './components/BookmarkletGenerator.tsx'; 
 import { Settings, BarChart3, CalendarClock, HelpCircle, Puzzle, LayoutDashboard } from 'lucide-react';
 
 // --- Report Definitions ---

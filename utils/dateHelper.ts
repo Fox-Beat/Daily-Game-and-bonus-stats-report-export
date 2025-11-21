@@ -1,4 +1,4 @@
-import { DateRange } from '../types';
+import { DateRange } from '../types.ts';
 
 export const formatDateForApi = (date: Date, format: 'datetime' | 'date', isEnd: boolean = false): string => {
   const yyyy = date.getFullYear();
